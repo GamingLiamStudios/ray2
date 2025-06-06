@@ -25,26 +25,73 @@ const WAVE_STEP: u16 = 35; // Step size in nm
 const WAVE_START: u16 = 360;
 const WAVE_END: u16 = 830;
 
-trait Material {
-    // Given a incident and refracted ray, each with their respective wavelength,
-    // return the ratio of strength as a value >0
+/// All rays used within the function are assumed to be in the local coordinate
+/// space of the object. Functions do not have to "know" the origin of a ray,
+/// and can just return a fixed distribution applicable to all possible point on
+/// the surface.
+trait PBMaterial {
+    // Sub-surface scattering;
+    // Ray comes in, goes into surface, bounces around in surface, comes out at
+    // point, sample from point.
+    // Sample point using BTDF; Light scattering from ray coming out from object
+    // Material has "transmittance coefficient"; value 0-1 saying "how likely" it is
+    // for a ray to enter an object.
+    // Can be used to model light through glass too; Scattering is dependent on
+    // "sub-surface scattering function", which describes likelyhood of ray
+    // traveling in direction inside object.
+
+    /// Returns the "weight" of the light coming from the `incident` direction
+    /// towards the `existant` ray. Equivelent to a BRDF.
+    ///
+    /// # Parameters
+    /// The existant ray is assumed to exist entirely outside the surface.
+    ///
+    /// # Implementation Notes
+    /// This can interpreted as a Probability Distribution Function, so the
+    /// total sum weights for all rays should not exceed 1.
+    fn reflectance(
+        self,
+        incident: Vec3,
+        existant: Ray,
+    ) -> f64;
+
+    /// Returns the "weight" of the light coming from the `incident` direction
+    /// towards the `existant` ray. Equivelent to a BTDF.
+    ///
+    /// # Parameters
+    /// The existant ray is assumed to exist within the surface.
+    ///
+    /// # Implementation Notes
+    /// This can interpreted as a Probability Distribution Function, so the
+    /// total sum weights for all rays should not exceed 1.
     fn transmittance(
-        &self,
+        self,
+        incident: Vec3,
+        existant: Ray,
+    ) -> f64;
+
+    /// Returns a probability for the `incident` ray to "enter" the surface.
+    fn scattering(
+        self,
         incident: Ray,
-        refracted: Ray,
     ) -> f64;
 
-    // Spectral Power Distribution?
-
-    /// Returns the Spectral Radiance emitted from a point on the source towards
-    /// a target
-    // Could've done two Vec3s (src, target), but then that would require both are
-    // in the same coordinate space, which isn't always possible/wanted
-    fn emmitance(
-        &self,
-        target: Ray,
-        distance: f64,
+    /// Returns the "weight" of the light coming from the `incident` direction
+    /// towards the `existant` ray.
+    ///
+    /// # Parameters
+    /// All rays are assumed to originate from within the surface.
+    ///
+    /// # Implementation Notes
+    /// This can interpreted as a Probability Distribution Function, so the
+    /// total sum weights for all rays should not exceed 1.
+    fn subsurface(
+        self,
+        incident: Vec3,
+        existant: Ray,
     ) -> f64;
+
+    // TODO: Allow for raw SPDs instead of inferred via physical assumptions
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -58,6 +105,8 @@ impl CIEIlluminant {
     // not exactly 6500K due to legacy reasons
     const D65: Self = Self::TypeD { temp: 6503.51 };
 
+    /// Returns the spectral power of an illuminant at a certain wavelength in
+    /// `W/m2/nm`
     pub fn spectral_power(
         self,
         wavelength: u16,
@@ -100,7 +149,8 @@ fn scale_intensity(
         .map(|wavelength| intensity(wavelength) * cie_xyz(wavelength).y)
         .sum::<f64>()
         * 5.0
-        * 683.002;
+        * 683.0;
+    // ApparentLuma(x) = 683 * Y(x)
     target / luma
 }
 
@@ -245,7 +295,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Cache this value, since computing it is expensive
-    let d65_scale = scale_intensity(300.0, |wavelength| {
+    let d65_scale = scale_intensity(1000.0, |wavelength| {
         CIEIlluminant::D65.spectral_power(wavelength)
     });
 
